@@ -18,7 +18,7 @@ yuanbao2api (端口 60809, proxy.js)
 
 ```bash
 cd yuanbao2api
-node proxy.js
+node ./proxy.js
 ```
 
 默认端口 60809，启动后访问 `http://localhost:60809/` 测试聊天，`http://localhost:60809/admin` 管理后台。

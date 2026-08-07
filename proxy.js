@@ -184,6 +184,12 @@ function buildFunctionCallPrompt(tools) {
   return config.functionCall.systemPrompt.replace('{tools_schema}', toolsSchema);
 }
 
+/* 截断过长的 query，防止 URL 超长导致 414 */
+function truncateQuery(query, maxLen) {
+  if (!query || query.length <= maxLen) return query;
+  return query.slice(0, maxLen) + '\n\n[中间内容已截断，共 ' + (query.length - maxLen) + ' 字符]';
+}
+
 function extractToolCalls(content, isStream = false) {
   if (!config.functionCall.enabled) return null;
 
@@ -393,6 +399,8 @@ async function handleChatCompletions(req, res) {
     }
   }
 
+  finalQuery = truncateQuery(finalQuery, 6000);
+
   if (!stream) {
     let fullContent = '';
     let citations = null;
@@ -523,6 +531,142 @@ async function handleChatCompletions(req, res) {
     sendChunk({ content: `\n\n[错误] ${err.message}` }, 'stop');
     res.write('data: [DONE]\n\n');
     activeRequests--;
+  }
+
+  res.end();
+}
+
+/* ========================== OpenAI Responses API 处理 ========================== */
+async function handleResponses(req, res) {
+  let body;
+  try {
+    const raw = await readBody(req);
+    if (raw.length > config.maxBodySize) {
+      throw new Error('Request body too large');
+    }
+    body = JSON.parse(raw.toString('utf-8'));
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Invalid JSON body', type: 'invalid_request_error' } }));
+    return;
+  }
+
+  const chatRequest = {
+    model: body.model || 'yuanbao',
+    messages: [],
+    stream: body.stream !== false,
+    tools: body.tools,
+  };
+
+  if (body.input) {
+    if (typeof body.input === 'string') {
+      chatRequest.messages.push({ role: 'user', content: body.input });
+    } else if (Array.isArray(body.input)) {
+      for (const item of body.input) {
+        if (item.type === 'input_text') {
+          chatRequest.messages.push({ role: 'user', content: item.text });
+        } else if (item.type === 'message') {
+          chatRequest.messages.push({
+            role: item.role,
+            content: item.content?.[0]?.text || ''
+          });
+        }
+      }
+    }
+  }
+
+  if (body.messages) {
+    for (const msg of body.messages) {
+      if (msg.role === 'user') {
+        chatRequest.messages.push({
+          role: 'user',
+          content: msg.content?.[0]?.text || msg.content || ''
+        });
+      } else {
+        chatRequest.messages.push(msg);
+      }
+    }
+  }
+
+  const stream = chatRequest.stream;
+  const query = truncateQuery(extractQuery(chatRequest.messages), 6000);
+
+  if (!stream) {
+    let fullContent = '';
+    let citations = null;
+
+    try {
+      await callYuanbao(query, config.defaultUserId || DEFAULT_USERID, '', {
+        onCitations: (refData) => { citations = refData; },
+        onContent: (text) => { fullContent += text; },
+      });
+    } catch (err) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: '上游调用失败: ' + err.message, type: 'api_error' } }));
+      return;
+    }
+
+    const response = {
+      id: 'resp_' + genId('resp'),
+      object: 'response',
+      created: Math.floor(Date.now() / 1000),
+      model: chatRequest.model,
+      output: [{
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: fullContent }]
+      }],
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    };
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(response));
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  const completionId = 'resp_' + genId('resp');
+  const created = Math.floor(Date.now() / 1000);
+
+  const sendChunk = (content, finishReason) => {
+    const chunk = {
+      id: completionId,
+      object: 'response',
+      created,
+      model: chatRequest.model,
+      output: content ? [{
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: content }]
+      }] : [],
+      finish_reason: finishReason,
+    };
+    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  };
+
+  sendChunk(null, null);
+
+  let fullContent = '';
+  try {
+    await callYuanbao(query, config.defaultUserId || DEFAULT_USERID, '', {
+      onContent: (text) => {
+        fullContent += text;
+        sendChunk(text, null);
+      },
+      onFinish: () => {
+        sendChunk(null, 'stop');
+        res.write('data: [DONE]\n\n');
+      },
+    });
+  } catch (err) {
+    sendChunk(`\n\n[错误] ${err.message}`, 'stop');
+    res.write('data: [DONE]\n\n');
   }
 
   res.end();
@@ -717,6 +861,10 @@ const server = http.createServer({ insecureHTTPParser: true }, async (req, res) 
     await handleChatCompletions(req, res);
     return;
   }
+  if (url === '/v1/responses' && req.method === 'POST') {
+    await handleResponses(req, res);
+    return;
+  }
   if (url === '/v1/models' && req.method === 'GET') {
     handleModels(req, res);
     return;
@@ -734,30 +882,33 @@ const server = http.createServer({ insecureHTTPParser: true }, async (req, res) 
 const PORT = process.env.PORT || config.port;
 
 server.listen(PORT, () => {
-  console.log('╔═══════════════════════════════════════════════════════════╗');
-  console.log('║  腾讯元宝 → OpenAI 兼容中转代理 (新版)                  ║');
-  console.log('╠═══════════════════════════════════════════════════════════╣');
-  console.log(`║  监听端口:    ${String(PORT).padEnd(45)}║`);
-  console.log(`║  鉴权:        ${config.apiKey ? '已启用 (Bearer token)' : '未启用'.padEnd(33)}║`);
-  console.log(`║  网络代理:    ${(proxyHost ? proxyHost + ':' + proxyPort : '直连').padEnd(45)}║`);
-  console.log(`║  并发限制:    ${config.maxConcurrent}`.padEnd(48) + '║');
-  console.log(`║  FunctionCall: ${config.functionCall.enabled ? '已启用' : '未启用'}`.padEnd(60) + '║');
-  console.log('║                                                           ║');
-  console.log('║  OpenAI 接口:                                              ║');
-  console.log('║    POST /v1/chat/completions   (流式 & 非流式 & FC)       ║');
-  console.log('║    GET  /v1/models                                        ║');
-  console.log('║    GET  /health                                           ║');
-  console.log('║                                                           ║');
-  console.log('║  管理接口:                                                 ║');
-  console.log('║    GET  /api/config                                        ║');
-  console.log('║    POST /api/config                                        ║');
-  console.log('║    GET  /api/stats                                        ║');
-  console.log('║                                                           ║');
-  console.log('║  旧接口透传: /kfbackend/* (向后兼容)                      ║');
-  console.log('║                                                           ║');
-  console.log(`║  测试页面:    http://localhost:${String(PORT).padEnd(29)}║`);
-  console.log(`║  管理后台:    http://localhost:${String(PORT).padEnd(29)}║`);
-  console.log('╚═══════════════════════════════════════════════════════════╝');
+  const bold = (s) => s;
+  const green = (s) => s;
+  console.log('');
+  console.log(green(bold('  🚀 腾讯元宝 → OpenAI 兼容中转代理 (新版)')));
+  console.log('');
+  console.log(`  📡 监听端口:    ${PORT}`);
+  console.log(`  🔑 鉴权:        ${config.apiKey ? '已启用 (Bearer token)' : '未启用'}`);
+  console.log(`  🌐 网络代理:    ${proxyHost ? proxyHost + ':' + proxyPort : '直连'}`);
+  console.log(`  ⚡ 并发限制:    ${config.maxConcurrent}`);
+  console.log(`  🛠  FunctionCall: ${config.functionCall.enabled ? '已启用' : '未启用'}`);
+  console.log('');
+  console.log('  OpenAI 接口:');
+  console.log('    POST /v1/chat/completions   (流式 & 非流式 & FC)');
+  console.log('    POST /v1/responses          (OpenAI Responses API)');
+  console.log('    GET  /v1/models');
+  console.log('    GET  /health');
+  console.log('');
+  console.log('  管理接口:');
+  console.log('    GET  /api/config');
+  console.log('    POST /api/config');
+  console.log('    GET  /api/stats');
+  console.log('');
+  console.log('  旧接口透传: /kfbackend/* (向后兼容)');
+  console.log('');
+  console.log(`  📖 测试页面:    http://localhost:${PORT}`);
+  console.log(`  ⚙️  管理后台:    http://localhost:${PORT}/admin`);
+  console.log('');
 });
 
 server.on('clientError', (err, socket) => {
