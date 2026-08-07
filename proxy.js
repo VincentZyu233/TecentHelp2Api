@@ -255,6 +255,12 @@ function callYuanbao(query, userid, senceName, callbacks) {
         let fullContent = '';
         let firstChunk = true;
         let toolCallDetected = false;
+        let finished = false;
+        const emitFinish = (text) => {
+          if (finished) return;
+          finished = true;
+          callbacks.onFinish?.(text || fullContent);
+        };
 
         upRes.on('data', (chunk) => {
           buffer += chunk.toString('utf-8');
@@ -300,7 +306,7 @@ function callYuanbao(query, userid, senceName, callbacks) {
             }
 
             if (finishReason === 'stop') {
-              callbacks.onFinish?.();
+              emitFinish();
             }
           }
         });
@@ -316,7 +322,7 @@ function callYuanbao(query, userid, senceName, callbacks) {
                   fullContent += delta.content;
                   callbacks.onContent?.(delta.content, false);
                 }
-                if (data.choices?.[0]?.finish_reason === 'stop') callbacks.onFinish?.();
+                if (data.choices?.[0]?.finish_reason === 'stop') emitFinish();
               } catch {}
             }
           }
@@ -325,7 +331,7 @@ function callYuanbao(query, userid, senceName, callbacks) {
           stats.latencies.push(latency);
           if (stats.latencies.length > 100) stats.latencies.shift();
 
-          callbacks.onFinish?.(fullContent);
+          emitFinish();
           resolve();
         });
 
@@ -521,6 +527,9 @@ async function handleChatCompletions(req, res) {
             return;
           }
         }
+        if (fullContent === '') {
+          sendChunk({ content: '（无内容返回）' }, null);
+        }
         sendChunk({}, 'stop');
         res.write('data: [DONE]\n\n');
         activeRequests--;
@@ -632,41 +641,142 @@ async function handleResponses(req, res) {
   });
 
   const completionId = 'resp_' + genId('resp');
+  const itemId = 'msg_' + genId('msg');
   const created = Math.floor(Date.now() / 1000);
 
-  const sendChunk = (content, finishReason) => {
-    const chunk = {
-      id: completionId,
-      object: 'response',
-      created,
-      model: chatRequest.model,
-      output: content ? [{
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'output_text', text: content }]
-      }] : [],
-      finish_reason: finishReason,
-    };
-    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  const sendEvent = (obj) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
   };
 
-  sendChunk(null, null);
+  const buildOutputText = (text) => ({
+    id: itemId,
+    type: 'message',
+    status: 'in_progress',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [] }],
+  });
+
+  const buildCompletedItem = (text) => ({
+    id: itemId,
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [] }],
+  });
+
+  const buildFullResponse = (text) => ({
+    id: completionId,
+    object: 'response',
+    created_at: created,
+    status: 'completed',
+    model: chatRequest.model,
+    output: [buildCompletedItem(text)],
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  });
+
+  // 1. response.created
+  sendEvent({
+    type: 'response.created',
+    response: {
+      id: completionId,
+      object: 'response',
+      created_at: created,
+      status: 'in_progress',
+      model: chatRequest.model,
+      output: [],
+      usage: null,
+    },
+  });
+
+  // 2. response.in_progress
+  sendEvent({
+    type: 'response.in_progress',
+    response: {
+      id: completionId,
+      object: 'response',
+      created_at: created,
+      status: 'in_progress',
+      model: chatRequest.model,
+      output: [],
+      usage: null,
+    },
+  });
+
+  // 3. response.output_item.added
+  sendEvent({
+    type: 'response.output_item.added',
+    output_index: 0,
+    item: buildOutputText(''),
+  });
+
+  // 4. response.content_part.added
+  sendEvent({
+    type: 'response.content_part.added',
+    item_id: itemId,
+    output_index: 0,
+    content_index: 0,
+    part: { type: 'output_text', text: '', annotations: [] },
+  });
 
   let fullContent = '';
+
+  const sendDelta = (text) => {
+    sendEvent({
+      type: 'response.output_text.delta',
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+    });
+  };
+
+  const finishStream = (text) => {
+    // 5. response.output_text.done
+    sendEvent({
+      type: 'response.output_text.done',
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      text,
+    });
+    // 6. response.content_part.done
+    sendEvent({
+      type: 'response.content_part.done',
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      part: { type: 'output_text', text, annotations: [] },
+    });
+    // 7. response.output_item.done
+    sendEvent({
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: buildCompletedItem(text),
+    });
+    // 8. response.completed
+    sendEvent({
+      type: 'response.completed',
+      response: buildFullResponse(text),
+    });
+    res.write('data: [DONE]\n\n');
+  };
+
   try {
     await callYuanbao(query, config.defaultUserId || DEFAULT_USERID, '', {
       onContent: (text) => {
         fullContent += text;
-        sendChunk(text, null);
+        sendDelta(text);
       },
       onFinish: () => {
-        sendChunk(null, 'stop');
-        res.write('data: [DONE]\n\n');
+        finishStream(fullContent || '');
       },
     });
   } catch (err) {
-    sendChunk(`\n\n[错误] ${err.message}`, 'stop');
-    res.write('data: [DONE]\n\n');
+    if (fullContent === '') {
+      fullContent = `\n\n[错误] ${err.message}`;
+      sendDelta(fullContent);
+    }
+    finishStream(fullContent);
   }
 
   res.end();
