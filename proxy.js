@@ -31,7 +31,7 @@
  */
 
 const http  = require('http');
-const tls   = require('tls');
+const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const crypto = require('crypto');
@@ -132,35 +132,14 @@ if (PROXY_URL) {
   if (m) { proxyHost = m[1]; proxyPort = parseInt(m[2]); }
 }
 
-/* ========================== TLS 连接池 ========================== */
-const tlsConnections = new Map();
-
-function getTLSConnection(callback) {
-  if (!config.keepAlive) {
-    const tlsSocket = tls.connect({ host: TARGET_HOST, port: 443, servername: TARGET_HOST }, () => callback(null, tlsSocket));
-    tlsSocket.on('error', (e) => callback(e));
-    return;
-  }
-
-  const key = `${TARGET_HOST}:443`;
-  const conn = tlsConnections.get(key);
-
-  if (conn && !conn.destroyed && conn.connecting !== true) {
-    if (conn.writable) {
-      callback(null, conn);
-      return;
-    }
-  }
-
-  const tlsSocket = tls.connect({ host: TARGET_HOST, port: 443, servername: TARGET_HOST }, () => {
-    tlsConnections.set(key, tlsSocket);
-    callback(null, tlsSocket);
-  });
-  tlsSocket.on('error', (e) => callback(e));
-  tlsSocket.on('close', () => {
-    tlsConnections.delete(key);
-  });
-}
+/* ========================== HTTPS Agent（连接池）========================== */
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
 
 /* ========================== 工具函数 ========================== */
 function genId(prefix) {
@@ -251,14 +230,14 @@ function callYuanbao(query, userid, senceName, callbacks) {
       'Connection': 'close',
     };
 
-    getTLSConnection((err, tlsSocket) => {
-      if (err) { reject(err); return; }
+    const startTime = Date.now();
 
-      const startTime = Date.now();
-
-      const upstream = http.request({
-        method: 'GET', path: urlPath, headers,
-        createConnection: () => tlsSocket,
+      const upstream = https.request({
+        method: 'GET',
+        hostname: TARGET_HOST,
+        path: urlPath,
+        headers,
+        agent: httpsAgent,
       }, (upRes) => {
         if (upRes.statusCode !== 200) {
           reject(new Error(`元宝接口返回 HTTP ${upRes.statusCode}`));
@@ -349,7 +328,6 @@ function callYuanbao(query, userid, senceName, callbacks) {
 
       upstream.on('error', (e) => reject(e));
       upstream.end();
-    });
   });
 }
 
@@ -641,35 +619,31 @@ function proxyLegacy(req, res, urlPath, body) {
   if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
   if (body?.length) headers['Content-Length'] = body.length;
 
-  getTLSConnection((err, tlsSocket) => {
-    if (err) {
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
-      return;
+  const upstream = https.request({
+    method: req.method,
+    hostname: TARGET_HOST,
+    path: urlPath,
+    headers,
+    agent: httpsAgent,
+  }, (upRes) => {
+    const respHeaders = { 'Access-Control-Allow-Origin': '*' };
+    const ct = upRes.headers['content-type'];
+    if (ct) respHeaders['Content-Type'] = ct;
+    if (ct?.includes('text/event-stream')) {
+      respHeaders['Cache-Control'] = 'no-cache';
+      respHeaders['X-Accel-Buffering'] = 'no';
     }
-    const upstream = http.request({
-      method: req.method, path: urlPath, headers,
-      createConnection: () => tlsSocket,
-    }, (upRes) => {
-      const respHeaders = { 'Access-Control-Allow-Origin': '*' };
-      const ct = upRes.headers['content-type'];
-      if (ct) respHeaders['Content-Type'] = ct;
-      if (ct?.includes('text/event-stream')) {
-        respHeaders['Cache-Control'] = 'no-cache';
-        respHeaders['X-Accel-Buffering'] = 'no';
-      }
-      res.writeHead(upRes.statusCode || 200, respHeaders);
-      upRes.pipe(res);
-    });
-    upstream.on('error', (e) => {
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
-      }
-    });
-    if (body?.length) upstream.write(body);
-    upstream.end();
+    res.writeHead(upRes.statusCode || 200, respHeaders);
+    upRes.pipe(res);
   });
+  upstream.on('error', (e) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+  });
+  if (body?.length) upstream.write(body);
+  upstream.end();
 }
 
 /* ========================== 静态文件 ========================== */
