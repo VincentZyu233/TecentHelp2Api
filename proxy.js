@@ -172,6 +172,22 @@ function extractQuery(messages) {
   return userQuery;
 }
 
+/* 从 Responses API 的 content 字段中提取纯文本（content 可能是数组或字符串） */
+function extractTextFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map(part => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part === 'object') return part.text || part.content || '';
+      return '';
+    }).join('');
+  }
+  if (content && typeof content === 'object') {
+    return content.text || content.content || '';
+  }
+  return '';
+}
+
 /* ========================== Function Call 适配 ========================== */
 function buildFunctionCallPrompt(tools) {
   if (!config.functionCall.enabled || !tools || !tools.length) return null;
@@ -567,17 +583,24 @@ async function handleResponses(req, res) {
     tools: body.tools,
   };
 
+  // instructions（本地代理将 Anthropic 的 system 转为 instructions）作为 system 消息
+  if (body.instructions) {
+    chatRequest.messages.push({ role: 'system', content: extractTextFromContent(body.instructions) });
+  }
+
   if (body.input) {
     if (typeof body.input === 'string') {
       chatRequest.messages.push({ role: 'user', content: body.input });
     } else if (Array.isArray(body.input)) {
       for (const item of body.input) {
-        if (item.type === 'input_text') {
-          chatRequest.messages.push({ role: 'user', content: item.text });
-        } else if (item.type === 'message') {
+        if (!item || typeof item !== 'object') continue;
+        // 兼容 cc-switch 本地代理转出的格式：{role, content:[{type:"input_text",text}]}（无 type 字段）
+        if (item.type === 'input_text' || (item.text && !item.role)) {
+          chatRequest.messages.push({ role: 'user', content: extractTextFromContent(item) });
+        } else {
           chatRequest.messages.push({
-            role: item.role,
-            content: item.content?.[0]?.text || ''
+            role: item.role || 'user',
+            content: extractTextFromContent(item.content)
           });
         }
       }
