@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>元宝代理 - 管理后台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #222631; --border: #2d3142;
+    --text: #e4e6eb; --text-dim: #8b8f9a; --primary: #4f8df7; --primary-dim: #3b6fd1;
+    --green: #34c759; --red: #ff5c5c; --orange: #ff9f43; --radius: 10px;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  
+  /* 顶部导航 */
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 20px; position: sticky; top: 0; z-index: 100; }
+  .header h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+  .header .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .header .status-dot.offline { background: var(--red); }
+  .header nav { display: flex; gap: 4px; margin-left: auto; }
+  .header nav button { background: none; border: none; color: var(--text-dim); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all .2s; }
+  .header nav button:hover { background: var(--surface2); color: var(--text); }
+  .header nav button.active { background: var(--primary); color: #fff; }
+  .header .save-bar { display: flex; gap: 8px; align-items: center; }
+
+  /* 布局 */
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* 卡片 */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card .desc { font-size: 13px; color: var(--text-dim); margin-bottom: 20px; }
+  .card h3 { font-size: 13px; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: .5px; margin: 20px 0 12px; }
+
+  /* 表单 */
+  .form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .form-row label { width: 180px; font-size: 14px; flex-shrink: 0; }
+  .form-row .hint { font-size: 12px; color: var(--text-dim); flex: 1; }
+  input[type="text"], input[type="number"], input[type="password"], textarea, select {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; color: var(--text); font-size: 14px; width: 100%; transition: border-color .2s;
+    font-family: inherit;
+  }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary); }
+  textarea { min-height: 120px; resize: vertical; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; line-height: 1.6; }
+  input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
+  
+  /* 开关 */
+  .switch { position: relative; width: 44px; height: 24px; display: inline-block; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; inset: 0; background: var(--border); border-radius: 12px; cursor: pointer; transition: .3s; }
+  .switch .slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .3s; }
+  .switch input:checked + .slider { background: var(--green); }
+  .switch input:checked + .slider::before { transform: translateX(20px); }
+
+  /* 按钮 */
+  .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .2s; display: inline-flex; align-items: center; gap: 6px; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-dim); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--text-dim); }
+  .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+  /* 统计卡片 */
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-box .value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+  .stat-box .label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .stat-box .value.green { color: var(--green); }
+  .stat-box .value.red { color: var(--red); }
+  .stat-box .value.orange { color: var(--orange); }
+  .stat-box .value.blue { color: var(--primary); }
+
+  /* 日志 */
+  .log-area { background: #0a0c12; border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; line-height: 1.8; max-height: 500px; overflow-y: auto; }
+  .log-area .log-line { color: var(--text-dim); }
+  .log-area .log-line .ts { color: #555; }
+  .log-area .log-line .lvl-INFO { color: var(--primary); }
+  .log-area .log-line .lvl-WARN { color: var(--orange); }
+  .log-area .log-line .lvl-ERROR { color: var(--red); }
+  .log-area .log-line .lvl-DEBUG { color: var(--text-dim); }
+
+  /* 测试区 */
+  .test-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .test-panel .panel { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .test-panel .panel h3 { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); }
+  .test-panel textarea { min-height: 200px; font-size: 12px; }
+  .test-panel .output { min-height: 200px; max-height: 400px; overflow-y: auto; background: #0a0c12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+  .test-panel .output .tool-call { color: var(--orange); }
+  .test-panel .output .content { color: var(--text); }
+  .test-panel .output .error { color: var(--red); }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px; display: flex; align-items: center; gap: 10px; font-size: 14px; box-shadow: 0 8px 32px rgba(0,0,0,.3); transform: translateY(120%); transition: transform .3s; z-index: 999; }
+  .toast.show { transform: translateY(0); }
+  .toast.success { border-color: var(--green); }
+  .toast.success .icon { color: var(--green); }
+  .toast.error { border-color: var(--red); }
+  .toast.error .icon { color: var(--red); }
+  .toast .icon { font-size: 18px; }
+
+  /* 标签 */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .badge-on { background: rgba(52,199,89,.15); color: var(--green); }
+  .badge-off { background: rgba(255,92,92,.15); color: var(--red); }
+
+  /* JSON 预览 */
+  .json-preview { background: #0a0c12; border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; line-height: 1.6; max-height: 300px; overflow-y: auto; white-space: pre; color: var(--text-dim); }
+
+  .actions-bar { display: flex; gap: 8px; justify-content: flex-end; padding: 16px 0; border-top: 1px solid var(--border); margin-top: 8px; }
+  .loading { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="status-dot" id="statusDot"></div>
+  <h1>元宝 OpenAI 代理 · 管理后台</h1>
+  <nav>
+    <button class="active" data-tab="dashboard">仪表盘</button>
+    <button data-tab="functioncall">Function Call</button>
+    <button data-tab="security">安全 & 性能</button>
+    <button data-tab="test">测试</button>
+    <button data-tab="raw">原始配置</button>
+  </nav>
+  <div class="save-bar">
+    <button class="btn btn-ghost btn-sm" onclick="loadConfig(true)">重新加载</button>
+    <button class="btn btn-primary btn-sm" onclick="saveConfig()">保存 & 热加载</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ==================== 仪表盘 ==================== -->
+  <div class="tab-content active" id="tab-dashboard">
+    <div class="stats-grid">
+      <div class="stat-box"><div class="value blue" id="stat-uptime">-</div><div class="label">运行时间</div></div>
+      <div class="stat-box"><div class="value" id="stat-total">-</div><div class="label">总请求</div></div>
+      <div class="stat-box"><div class="value orange" id="stat-active">-</div><div class="label">活跃请求</div></div>
+      <div class="stat-box"><div class="value red" id="stat-errors">-</div><div class="label">错误数</div></div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-box"><div class="value" id="stat-stream">-</div><div class="label">流式请求</div></div>
+      <div class="stat-box"><div class="value" id="stat-nonstream">-</div><div class="label">非流式请求</div></div>
+      <div class="stat-box"><div class="value green" id="stat-toolcalls">-</div><div class="label">工具调用</div></div>
+      <div class="stat-box"><div class="value blue" id="stat-latency">-</div><div class="label">平均延迟</div></div>
+    </div>
+
+    <div class="card">
+      <h2>服务状态</h2>
+      <div class="desc">实时健康检查与上游连通性</div>
+      <div id="healthInfo" style="font-size: 14px; line-height: 2;">
+        <span class="loading"></span> 加载中...
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>运行日志</h2>
+      <div class="desc">最近的服务日志（每 5 秒刷新）</div>
+      <div class="log-area" id="logArea">
+        <div class="log-line"><span class="ts">--</span> 等待日志...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Function Call ==================== -->
+  <div class="tab-content" id="tab-functioncall">
+    <div class="card">
+      <h2>Function Call 适配配置</h2>
+      <div class="desc">通过 prompt 注入 + 固定格式输出解析，让不支持原生 function call 的元宝接口兼容 OpenAI tools 协议</div>
+      
+      <div class="form-row">
+        <label>启用 Function Call</label>
+        <label class="switch"><input type="checkbox" id="fc-enabled"><span class="slider"></span></label>
+        <span class="hint">开启后，请求中携带 tools 参数时会自动注入 system prompt 并检测输出标记</span>
+      </div>
+
+      <div class="form-row">
+        <label>检测窗口大小</label>
+        <input type="number" id="fc-detectionBuffer" min="50" max="2000" step="50" style="width:120px">
+        <span class="hint">字符数。流式输出时缓冲前 N 个字符判断是否为 tool call，超过后直接透传</span>
+      </div>
+
+      <h3>输出标记格式</h3>
+      <div class="form-row">
+        <label>开始标记</label>
+        <input type="text" id="fc-marker" placeholder="<tool_call>">
+        <span class="hint">模型输出此标记表示要调用工具</span>
+      </div>
+      <div class="form-row">
+        <label>结束标记</label>
+        <input type="text" id="fc-markerEnd" placeholder="</tool_call>">
+        <span class="hint">匹配此标记后解析 JSON</span>
+      </div>
+
+      <h3>System Prompt 模板</h3>
+      <div class="form-row" style="flex-direction:column;align-items:stretch">
+        <label style="width:auto;margin-bottom:6px">注入到对话开头的指令模板</label>
+        <textarea id="fc-systemPrompt" placeholder="你可以调用以下工具函数来帮助回答问题..."></textarea>
+        <span class="hint" style="margin-top:6px">使用 <code>{tools_schema}</code> 占位符，运行时会替换为实际工具描述。留空则使用默认模板。</span>
+      </div>
+
+      <div class="actions-bar">
+        <button class="btn btn-ghost btn-sm" onclick="resetFcPrompt()">恢复默认模板</button>
+        <button class="btn btn-primary btn-sm" onclick="saveConfig()">保存</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>适配原理说明</h2>
+      <div class="desc">function call 适配的完整工作流程</div>
+      <div style="font-size: 14px; line-height: 2;">
+        <p><strong style="color:var(--primary)">1. 请求转换</strong></p>
+        <p style="margin-left:16px;color:var(--text-dim)">OpenAI tools 定义 → 转换为自然语言描述 → 注入到 query 开头</p>
+        <p><strong style="color:var(--primary)">2. 模型推理</strong></p>
+        <p style="margin-left:16px;color:var(--text-dim)">元宝按注入的指令格式输出，如：<code>&lt;tool_call&gt;{"name":"get_weather","arguments":{"city":"深圳"}}&lt;/tool_call&gt;</code></p>
+        <p><strong style="color:var(--primary)">3. 输出解析</strong></p>
+        <p style="margin-left:16px;color:var(--text-dim)">非流式：完整输出后解析标记 → 返回 OpenAI tool_calls 格式</p>
+        <p style="margin-left:16px;color:var(--text-dim)">流式：缓冲前 N 字符检测标记 → 命中则返回 tool_calls chunk → 未命中则透传</p>
+        <p><strong style="color:var(--primary)">4. 多轮对话</strong></p>
+        <p style="margin-left:16px;color:var(--text-dim)">tool 返回结果会被转为自然语言拼入 query，支持连续多轮工具调用</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 安全 & 性能 ==================== -->
+  <div class="tab-content" id="tab-security">
+    <div class="card">
+      <h2>认证配置</h2>
+      <div class="desc">API Key 鉴权，空值表示不鉴权</div>
+      <div class="form-row">
+        <label>API Key</label>
+        <input type="password" id="cfg-apiKey" placeholder="留空则不鉴权">
+        <button class="btn btn-ghost btn-sm" onclick="togglePw('cfg-apiKey', this)">显示</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>CORS 跨域</h2>
+      <div class="desc">允许的来源列表，逗号分隔</div>
+      <div class="form-row">
+        <label>允许的来源</label>
+        <input type="text" id="cfg-corsOrigins" placeholder="* 或 https://example.com,https://app.com">
+        <span class="hint"><code>*</code> 允许所有来源（生产环境建议限定域名）</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>性能 & 限流</h2>
+      <div class="desc">连接池、并发控制、超时设置</div>
+      
+      <h3>连接管理</h3>
+      <div class="form-row">
+        <label>Keep-Alive 连接池</label>
+        <label class="switch"><input type="checkbox" id="cfg-keepAlive"><span class="slider"></span></label>
+        <span class="hint">复用 TLS 连接，减少握手开销</span>
+      </div>
+
+      <h3>并发控制</h3>
+      <div class="form-row">
+        <label>最大并发请求数</label>
+        <input type="number" id="cfg-maxConcurrent" min="1" max="200" style="width:120px">
+        <span class="hint">超过返回 429</span>
+      </div>
+      <div class="form-row">
+        <label>请求体大小限制</label>
+        <input type="number" id="cfg-maxBodySize" min="1048576" step="1048576" style="width:160px">
+        <span class="hint">字节，默认 10MB</span>
+      </div>
+
+      <h3>超时 & 重试</h3>
+      <div class="form-row">
+        <label>请求超时 (ms)</label>
+        <input type="number" id="cfg-requestTimeoutMs" min="5000" step="5000" style="width:120px">
+      </div>
+      <div class="form-row">
+        <label>重试次数</label>
+        <input type="number" id="cfg-retryCount" min="0" max="5" style="width:80px">
+      </div>
+      <div class="form-row">
+        <label>重试延迟 (ms)</label>
+        <input type="number" id="cfg-retryDelayMs" min="100" step="100" style="width:120px">
+      </div>
+
+      <div class="actions-bar">
+        <button class="btn btn-primary btn-sm" onclick="saveConfig()">保存</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>日志配置</h2>
+      <div class="form-row">
+        <label>日志级别</label>
+        <select id="cfg-logLevel" style="width:160px">
+          <option value="debug">DEBUG</option>
+          <option value="info">INFO</option>
+          <option value="warn">WARN</option>
+          <option value="error">ERROR</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>脱敏敏感信息</label>
+        <label class="switch"><input type="checkbox" id="cfg-maskSensitive"><span class="slider"></span></label>
+        <span class="hint">API Key 等敏感字段在管理 API 中以 *** 显示</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 测试 ==================== -->
+  <div class="tab-content" id="tab-test">
+    <div class="card">
+      <h2>Function Call 测试</h2>
+      <div class="desc">模拟 OpenAI tools 请求，验证 function call 适配是否正常</div>
+      
+      <h3>测试工具定义</h3>
+      <textarea id="testTools" style="min-height:160px">[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "获取指定城市的天气信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string", "description": "城市名称" },
+          "unit": { "type": "string", "description": "温度单位", "enum": ["celsius", "fahrenheit"] }
+        },
+        "required": ["city"]
+      }
+    }
+  }
+]</textarea>
+
+      <h3 style="margin-top:16px">测试消息</h3>
+      <textarea id="testMessage" style="min-height:60px">深圳今天天气怎么样？</textarea>
+
+      <div class="form-row" style="margin-top:12px">
+        <label>流式输出</label>
+        <label class="switch"><input type="checkbox" id="testStream" checked><span class="slider"></span></label>
+        <span class="hint">开启则使用 SSE 流式测试</span>
+      </div>
+
+      <div class="actions-bar">
+        <button class="btn btn-primary" onclick="runTest()">运行测试</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>测试输出</h2>
+      <div class="test-panel">
+        <div class="panel">
+          <h3>原始响应（解析前）</h3>
+          <div class="output" id="testRawOutput">等待测试...</div>
+        </div>
+        <div class="panel">
+          <h3>OpenAI 格式（解析后）</h3>
+          <div class="output" id="testParsedOutput">等待测试...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 原始配置 ==================== -->
+  <div class="tab-content" id="tab-raw">
+    <div class="card">
+      <h2>原始配置文件 (config.json)</h2>
+      <div class="desc">直接编辑 JSON 配置，保存后自动热加载</div>
+      <textarea id="rawConfig" style="min-height:500px"></textarea>
+      <div class="actions-bar">
+        <button class="btn btn-ghost btn-sm" onclick="loadConfig(true)">重新加载</button>
+        <button class="btn btn-primary btn-sm" onclick="saveRawConfig()">保存原始配置</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast">
+  <span class="icon">✓</span>
+  <span id="toastMsg">操作成功</span>
+</div>
+
+<script>
+let currentConfig = null;
+let logPollTimer = null;
+let statsPollTimer = null;
+
+const DEFAULT_FC_PROMPT = `你可以调用以下工具函数来帮助回答问题。
+
+可用工具列表：
+{tools_schema}
+
+## 规则
+1. 当你需要调用工具时，只输出以下格式，不要输出任何其他内容：
+<tool_call>
+{"name": "函数名", "arguments": {"参数名": "参数值"}}
+</tool_call>
+2. 等待用户返回工具结果后，再继续回答。
+3. 如果不需要调用工具，直接正常回答用户问题。
+4. arguments 中的值必须是合法的 JSON 类型（字符串、数字、布尔值等）。`;
+
+/* ==================== Tab 切换 ==================== */
+document.querySelectorAll('.header nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.header nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+/* ==================== API 调用 ==================== */
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const resp = await fetch(path, opts);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+/* ==================== 加载配置 ==================== */
+async function loadConfig(showToast = false) {
+  try {
+    currentConfig = await api('/api/config');
+    fillForm(currentConfig);
+    // 同时填充原始配置
+    document.getElementById('rawConfig').value = JSON.stringify(currentConfig, null, 2);
+    if (showToast) toast('配置已重新加载', 'success');
+    checkHealth();
+  } catch (err) {
+    toast('加载配置失败: ' + err.message, 'error');
+    document.getElementById('statusDot').classList.add('offline');
+  }
+}
+
+function fillForm(cfg) {
+  // Function Call
+  const fc = cfg.functionCall || {};
+  document.getElementById('fc-enabled').checked = fc.enabled !== false;
+  document.getElementById('fc-detectionBuffer').value = fc.detectionBuffer || 200;
+  document.getElementById('fc-marker').value = fc.marker || '<tool_call>';
+  document.getElementById('fc-markerEnd').value = fc.markerEnd || '</tool_call>';
+  document.getElementById('fc-systemPrompt').value = fc.systemPrompt || DEFAULT_FC_PROMPT;
+
+  // 安全 & 性能
+  document.getElementById('cfg-apiKey').value = cfg.apiKey === '***' ? '' : (cfg.apiKey || '');
+  document.getElementById('cfg-corsOrigins').value = (cfg.corsOrigins || []).join(',');
+  document.getElementById('cfg-keepAlive').checked = cfg.keepAlive !== false;
+  document.getElementById('cfg-maxConcurrent').value = cfg.maxConcurrent || 20;
+  document.getElementById('cfg-maxBodySize').value = cfg.maxBodySize || 10485760;
+  document.getElementById('cfg-requestTimeoutMs').value = cfg.requestTimeoutMs || 60000;
+  document.getElementById('cfg-retryCount').value = cfg.retryCount ?? 1;
+  document.getElementById('cfg-retryDelayMs').value = cfg.retryDelayMs || 1000;
+  document.getElementById('cfg-logLevel').value = (cfg.logging?.level) || 'info';
+  document.getElementById('cfg-maskSensitive').checked = cfg.logging?.maskSensitive !== false;
+}
+
+/* ==================== 收集表单 → 配置 ==================== */
+function collectConfig() {
+  const cfg = { ...currentConfig };
+  cfg.apiKey = document.getElementById('cfg-apiKey').value || '';
+  cfg.corsOrigins = document.getElementById('cfg-corsOrigins').value
+    .split(',').map(s => s.trim()).filter(Boolean);
+  cfg.keepAlive = document.getElementById('cfg-keepAlive').checked;
+  cfg.maxConcurrent = parseInt(document.getElementById('cfg-maxConcurrent').value) || 20;
+  cfg.maxBodySize = parseInt(document.getElementById('cfg-maxBodySize').value) || 10485760;
+  cfg.requestTimeoutMs = parseInt(document.getElementById('cfg-requestTimeoutMs').value) || 60000;
+  cfg.retryCount = parseInt(document.getElementById('cfg-retryCount').value) || 0;
+  cfg.retryDelayMs = parseInt(document.getElementById('cfg-retryDelayMs').value) || 1000;
+  cfg.logging = {
+    level: document.getElementById('cfg-logLevel').value,
+    maskSensitive: document.getElementById('cfg-maskSensitive').checked,
+  };
+  cfg.functionCall = {
+    enabled: document.getElementById('fc-enabled').checked,
+    detectionBuffer: parseInt(document.getElementById('fc-detectionBuffer').value) || 200,
+    marker: document.getElementById('fc-marker').value || '<tool_call>',
+    markerEnd: document.getElementById('fc-markerEnd').value || '</tool_call>',
+    systemPrompt: document.getElementById('fc-systemPrompt').value,
+  };
+  return cfg;
+}
+
+/* ==================== 保存配置 ==================== */
+async function saveConfig() {
+  try {
+    const cfg = collectConfig();
+    // 如果 apiKey 是空但原来是 ***，保留原值
+    if (currentConfig.apiKey === '***' && !cfg.apiKey) cfg.apiKey = '***';
+    await api('/api/config', 'POST', cfg);
+    currentConfig = cfg;
+    document.getElementById('rawConfig').value = JSON.stringify(cfg, null, 2);
+    toast('配置已保存并热加载', 'success');
+  } catch (err) {
+    toast('保存失败: ' + err.message, 'error');
+  }
+}
+
+async function saveRawConfig() {
+  try {
+    const cfg = JSON.parse(document.getElementById('rawConfig').value);
+    await api('/api/config', 'POST', cfg);
+    currentConfig = cfg;
+    fillForm(cfg);
+    toast('原始配置已保存并热加载', 'success');
+  } catch (err) {
+    toast('保存失败: ' + err.message, 'error');
+  }
+}
+
+function resetFcPrompt() {
+  document.getElementById('fc-systemPrompt').value = DEFAULT_FC_PROMPT;
+  toast('已恢复默认模板，记得保存', 'success');
+}
+
+/* ==================== 统计 & 健康检查 ==================== */
+function fmtUptime(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+  return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
+}
+
+async function checkHealth() {
+  try {
+    const h = await api('/health');
+    document.getElementById('statusDot').classList.remove('offline');
+    document.getElementById('healthInfo').innerHTML = `
+      <div>✅ 服务状态: <strong style="color:var(--green)">${h.status}</strong></div>
+      <div>⏱ 运行时间: ${fmtUptime(h.stats.uptime)}</div>
+      <div>🌐 上游: <code>${h.upstream}</code></div>
+      <div>📊 总请求: ${h.stats.totalRequests} | 活跃: ${h.stats.activeRequests} | 错误: ${h.stats.errors}</div>
+    `;
+  } catch {
+    document.getElementById('statusDot').classList.add('offline');
+    document.getElementById('healthInfo').innerHTML = '<span style="color:var(--red)">❌ 服务不可达</span>';
+  }
+}
+
+async function loadStats() {
+  try {
+    const s = await api('/api/stats');
+    document.getElementById('stat-uptime').textContent = fmtUptime(s.uptime);
+    document.getElementById('stat-total').textContent = s.totalRequests;
+    document.getElementById('stat-active').textContent = s.activeRequests;
+    document.getElementById('stat-errors').textContent = s.errors;
+    document.getElementById('stat-stream').textContent = s.streamRequests;
+    document.getElementById('stat-nonstream').textContent = s.nonStreamRequests;
+    document.getElementById('stat-toolcalls').textContent = s.toolCalls;
+    document.getElementById('stat-latency').textContent = s.avgLatencyMs + 'ms';
+  } catch {}
+}
+
+/* ==================== 日志 ==================== */
+async function loadLogs() {
+  // 日志通过 /health 间接获取（简化版，实际可扩展 WebSocket）
+  // 这里只做定时刷新统计
+  await loadStats();
+}
+
+/* ==================== Function Call 测试 ==================== */
+async function runTest() {
+  const rawOutput = document.getElementById('testRawOutput');
+  const parsedOutput = document.getElementById('testParsedOutput');
+  rawOutput.innerHTML = '<span class="loading"></span> 请求中...';
+  parsedOutput.innerHTML = '<span class="loading"></span> 等待解析...';
+
+  let tools, message;
+  try {
+    tools = JSON.parse(document.getElementById('testTools').value);
+    message = document.getElementById('testMessage').value;
+  } catch (err) {
+    rawOutput.innerHTML = '<span class="error">工具定义 JSON 解析失败: ' + err.message + '</span>';
+    return;
+  }
+
+  if (!message) {
+    rawOutput.innerHTML = '<span class="error">请输入测试消息</span>';
+    return;
+  }
+
+  const stream = document.getElementById('testStream').checked;
+  const body = { model: 'yuanbao', stream, messages: [{ role: 'user', content: message }], tools };
+
+  try {
+    if (stream) {
+      // 流式测试
+      rawOutput.innerHTML = '';
+      parsedOutput.innerHTML = '';
+      const resp = await fetch('/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let parsed = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const jsonStr = line.slice(5).trim();
+          if (jsonStr === '[DONE]') { rawOutput.innerHTML += '\n--- [DONE] ---'; continue; }
+          try {
+            const chunk = JSON.parse(jsonStr);
+            const delta = chunk.choices?.[0]?.delta || {};
+            if (delta.content) rawOutput.innerHTML += `<span class="content">${escapeHtml(delta.content)}</span>`;
+            if (delta.tool_calls) {
+              const tc = delta.tool_calls[0];
+              rawOutput.innerHTML += `<span class="tool-call">\n[TOOL CALL] ${tc.function.name}(${tc.function.arguments})</span>\n`;
+              parsed.push({ type: 'tool_call', name: tc.function.name, arguments: tc.function.arguments });
+            }
+            if (chunk.choices?.[0]?.finish_reason) {
+              rawOutput.innerHTML += `\n[finish_reason: ${chunk.choices[0].finish_reason}]`;
+            }
+          } catch {}
+        }
+      }
+
+      parsedOutput.innerHTML = formatParsed(parsed.length ? parsed : [{ type: 'content', text: '（无 tool call，正常文本输出）' }]);
+    } else {
+      // 非流式测试
+      const resp = await fetch('/v1/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      const choice = data.choices?.[0] || {};
+      if (choice.message?.tool_calls) {
+        rawOutput.innerHTML = `<span class="tool-call">检测到 tool call（非流式模式下原始输出已被代理拦截解析）</span>`;
+        parsedOutput.innerHTML = formatParsed(choice.message.tool_calls.map(tc => ({
+          type: 'tool_call', name: tc.function.name, arguments: tc.function.arguments,
+        })));
+      } else {
+        rawOutput.innerHTML = `<span class="content">${escapeHtml(choice.message?.content || '')}</span>`;
+        parsedOutput.innerHTML = `<span class="content">${escapeHtml(choice.message?.content || '（空）')}</span>`;
+      }
+    }
+  } catch (err) {
+    rawOutput.innerHTML = `<span class="error">请求失败: ${err.message}</span>`;
+    parsedOutput.innerHTML = '<span class="error">解析失败</span>';
+  }
+}
+
+function formatParsed(items) {
+  return items.map(item => {
+    if (item.type === 'tool_call') {
+      return `<span class="tool-call">✓ Tool Call Detected
+  name: ${item.name}
+  arguments: ${escapeHtml(typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments, null, 2))}</span>`;
+    }
+    return `<span class="content">${escapeHtml(item.text || '')}</span>`;
+  }).join('\n\n');
+}
+
+/* ==================== 工具函数 ==================== */
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function togglePw(id, btn) {
+  const inp = document.getElementById(id);
+  if (inp.type === 'password') { inp.type = 'text'; btn.textContent = '隐藏'; }
+  else { inp.type = 'password'; btn.textContent = '显示'; }
+}
+
+function toast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  const icon = t.querySelector('.icon');
+  t.className = 'toast show ' + type;
+  icon.textContent = type === 'success' ? '✓' : '✗';
+  document.getElementById('toastMsg').textContent = msg;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+/* ==================== 初始化 ==================== */
+loadConfig();
+loadStats();
+checkHealth();
+
+// 定时刷新统计
+statsPollTimer = setInterval(() => { loadStats(); checkHealth(); }, 5000);
+</script>
+</body>
+</html>
