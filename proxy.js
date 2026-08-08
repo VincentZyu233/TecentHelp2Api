@@ -161,7 +161,10 @@ function extractQuery(messages) {
   let lastUser = '';
 
   for (const msg of messages) {
-    if (msg.role === 'system') systemParts.push(msg.content);
+    if (msg.role === 'system') {
+      const c = msg.content;
+      if (typeof c === 'string' && !isHarnessInstruction(c)) systemParts.push(c);
+    }
     if (msg.role === 'user') lastUser = msg.content;
   }
 
@@ -170,6 +173,14 @@ function extractQuery(messages) {
     return systemParts.join('\n') + '\n\n' + userQuery;
   }
   return userQuery;
+}
+
+/* 识别 codex/claude 等客户端注入的 harness 指令，避免污染元宝 */
+function isHarnessInstruction(text) {
+  if (typeof text !== 'string') return false;
+  return /You are (Codex|Claude Code|Claude)(\s|,|\.|$)/i.test(text) ||
+         /codex-cli/i.test(text) ||
+         /You are a coding agent/i.test(text);
 }
 
 /* 解析 userid：显式传入则保留会话，否则随机生成，避免元宝跨请求上下文污染 */
@@ -591,8 +602,12 @@ async function handleResponses(req, res) {
   };
 
   // instructions（本地代理将 Anthropic 的 system 转为 instructions）作为 system 消息
+  // 过滤 codex/claude 的 harness 指令，避免污染元宝
   if (body.instructions) {
-    chatRequest.messages.push({ role: 'system', content: extractTextFromContent(body.instructions) });
+    const inst = extractTextFromContent(body.instructions);
+    if (inst && !isHarnessInstruction(inst)) {
+      chatRequest.messages.push({ role: 'system', content: inst });
+    }
   }
 
   if (body.input) {
