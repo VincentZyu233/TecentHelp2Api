@@ -172,6 +172,13 @@ function extractQuery(messages) {
   return userQuery;
 }
 
+/* 解析 userid：显式传入则保留会话，否则随机生成，避免元宝跨请求上下文污染 */
+function resolveUserId(req, body) {
+  const explicit = body?.user || req?.headers?.['x-yuanbao-userid'];
+  if (explicit) return explicit;
+  return 'user-' + crypto.randomBytes(12).toString('hex');
+}
+
 /* 从 Responses API 的 content 字段中提取纯文本（content 可能是数组或字符串） */
 function extractTextFromContent(content) {
   if (typeof content === 'string') return content;
@@ -398,7 +405,7 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const userid = body.user || req.headers['x-yuanbao-userid'] || config.defaultUserId || DEFAULT_USERID;
+  const userid = resolveUserId(req, body);
   const senceName = body.sence_name || req.headers['x-yuanbao-sence'] || '';
   const model = body.model || 'yuanbao';
   const stream = body.stream !== false;
@@ -628,7 +635,7 @@ async function handleResponses(req, res) {
     let citations = null;
 
     try {
-      await callYuanbao(query, config.defaultUserId || DEFAULT_USERID, '', {
+      await callYuanbao(query, resolveUserId(req, body), '', {
         onCitations: (refData) => { citations = refData; },
         onContent: (text) => { fullContent += text; },
       });
@@ -785,7 +792,7 @@ async function handleResponses(req, res) {
   };
 
   try {
-    await callYuanbao(query, config.defaultUserId || DEFAULT_USERID, '', {
+    await callYuanbao(query, resolveUserId(req, body), '', {
       onContent: (text) => {
         fullContent += text;
         sendDelta(text);
