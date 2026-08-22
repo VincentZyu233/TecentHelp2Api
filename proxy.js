@@ -123,6 +123,52 @@ fs.watchFile(CONFIG_PATH, { interval: 500 }, () => {
   log('info', '配置已热重载');
 });
 
+/* ========================== 会话管理 ========================== */
+// 设备 → 元宝 userid 的映射表
+// key = clientIP:sessionId，value = { yuanbaoUserId, createdAt, lastUsed }
+const sessionStore = new Map();
+const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 分钟无活动自动过期
+
+// 定期清理过期会话
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of sessionStore) {
+    if (now - val.lastUsed > SESSION_TTL_MS) sessionStore.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+function getClientIP(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return fwd.split(',')[0].trim();
+  return req.socket.remoteAddress?.replace(/^::ffff:/, '') || 'unknown';
+}
+
+/**
+ * 获取或创建会话的 userid
+ * 优先级：body.user > X-Session-Id + IP 映射 > IP 固定映射
+ * newSession=true 时强制创建新会话
+ */
+function resolveUserId(req, body) {
+  // 客户端显式传了 user，直接用（高级用法）
+  if (body.user) return { userid: body.user, sessionId: body.user, isNew: false };
+
+  const ip = getClientIP(req);
+  const clientSessionId = req.headers['x-session-id'] || body.session_id || 'default';
+  const newSession = body.new_session === true || req.headers['x-new-session'] === 'true';
+
+  const key = `${ip}:${clientSessionId}`;
+
+  if (newSession || !sessionStore.has(key)) {
+    const yuanbaoUserId = genId('user');
+    sessionStore.set(key, { yuanbaoUserId, createdAt: Date.now(), lastUsed: Date.now() });
+    return { userid: yuanbaoUserId, sessionId: clientSessionId, isNew: true };
+  }
+
+  const entry = sessionStore.get(key);
+  entry.lastUsed = Date.now();
+  return { userid: entry.yuanbaoUserId, sessionId: clientSessionId, isNew: false };
+}
+
 /* ========================== 环境代理检测 ========================== */
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.https_proxy ||
                   process.env.HTTP_PROXY  || process.env.http_proxy || '';
@@ -146,10 +192,16 @@ function genId(prefix) {
   return prefix + '-' + crypto.randomBytes(12).toString('hex');
 }
 
-function readBody(req) {
+function readBody(req, maxSize) {
+  const limit = maxSize || config.maxBodySize || 10485760;
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('Body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
@@ -158,21 +210,27 @@ function readBody(req) {
 function extractQuery(messages) {
   if (!Array.isArray(messages) || !messages.length) return '';
   let systemParts = [];
-  let lastUser = '';
+  let conversation = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
       const c = msg.content;
       if (typeof c === 'string' && !isHarnessInstruction(c)) systemParts.push(c);
+    } else if (msg.role === 'user') {
+      conversation.push(`用户: ${msg.content}`);
+    } else if (msg.role === 'assistant') {
+      // 去掉引用部分，只保留正文
+      let content = msg.content || '';
+      if (content.includes('\n---\n')) content = content.split('\n---\n').pop() || content;
+      conversation.push(`助手: ${content}`);
     }
-    if (msg.role === 'user') lastUser = msg.content;
   }
 
-  const userQuery = lastUser || messages[messages.length - 1].content || '';
+  const convText = conversation.join('\n\n');
   if (systemParts.length) {
-    return systemParts.join('\n') + '\n\n' + userQuery;
+    return systemParts.join('\n') + '\n\n' + convText;
   }
-  return userQuery;
+  return convText;
 }
 
 /* 识别 codex/claude 等客户端注入的 harness 指令，避免污染元宝 */
@@ -183,12 +241,7 @@ function isHarnessInstruction(text) {
          /You are a coding agent/i.test(text);
 }
 
-/* 解析 userid：显式传入则保留会话，否则随机生成，避免元宝跨请求上下文污染 */
-function resolveUserId(req, body) {
-  const explicit = body?.user || req?.headers?.['x-yuanbao-userid'];
-  if (explicit) return explicit;
-  return 'user-' + crypto.randomBytes(12).toString('hex');
-}
+/* resolveUserId 已移至「会话管理」模块，支持按设备分配固定 userid */
 
 /* 从 Responses API 的 content 字段中提取纯文本（content 可能是数组或字符串） */
 function extractTextFromContent(content) {
@@ -218,10 +271,28 @@ function buildFunctionCallPrompt(tools) {
   return config.functionCall.systemPrompt.replace('{tools_schema}', toolsSchema);
 }
 
-/* 截断过长的 query，防止 URL 超长导致 414 */
+/* 截断过长的 query，防止 URL 超长导致 414
+ * 中文 URL 编码后每个字符约 9 字节（%E6%B7%B1），需按编码后长度截断
+ */
 function truncateQuery(query, maxLen) {
-  if (!query || query.length <= maxLen) return query;
-  return query.slice(0, maxLen) + '\n\n[中间内容已截断，共 ' + (query.length - maxLen) + ' 字符]';
+  if (!query) return query;
+  const encLen = encodeURIComponent(query).length;
+  if (encLen <= maxLen) return query;
+
+  // 保留开头（system prompt / 工具定义）和结尾（最近对话）
+  const headStr = query.slice(0, Math.min(query.length, 500));
+  const marker = '\n\n[...历史消息已截断...]\n\n';
+  const headEnc = encodeURIComponent(headStr).length + encodeURIComponent(marker).length;
+  const remaining = maxLen - headEnc - 200; // 200 给 tail 余量
+
+  // 从尾部往前找，直到编码后长度合适
+  let tailStart = query.length;
+  while (tailStart > 0 && encodeURIComponent(query.slice(tailStart)).length > remaining) {
+    tailStart = Math.floor(tailStart * 0.9);
+  }
+  const result = headStr + marker + query.slice(tailStart);
+  log('warn', `query 过长 (编码后 ${encLen} 字符)，已截断至 ${encodeURIComponent(result).length} 字符`);
+  return result;
 }
 
 function extractToolCalls(content, isStream = false) {
@@ -416,7 +487,7 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const userid = resolveUserId(req, body);
+  const { userid } = resolveUserId(req, body);
   const senceName = body.sence_name || req.headers['x-yuanbao-sence'] || '';
   const model = body.model || 'yuanbao';
   const stream = body.stream !== false;
@@ -957,14 +1028,31 @@ const MIME = {
 
 function serveStatic(req, res, url) {
   let filePath = url === '/' ? '/index.html' : url;
-  filePath = path.join(__dirname, filePath.split('?')[0]);
-  fs.readFile(filePath, (err, data) => {
+  filePath = filePath.split('?')[0];
+
+  // 路径遍历防护：只允许访问 __dirname 下的文件
+  const resolved = path.resolve(__dirname, '.' + filePath);
+  if (!resolved.startsWith(__dirname + path.sep) && resolved !== __dirname) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('403 Forbidden');
+    return;
+  }
+
+  // 只允许已知扩展名
+  const ext = path.extname(resolved);
+  if (!MIME[ext]) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
+    return;
+  }
+
+  fs.readFile(resolved, (err, data) => {
     if (err) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('404 Not Found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[ext] });
     res.end(data);
   });
 }
@@ -1011,6 +1099,34 @@ const server = http.createServer({ insecureHTTPParser: true }, async (req, res) 
   if (url === '/api/config' && req.method === 'GET') { handleGetConfig(req, res); return; }
   if (url === '/api/config' && req.method === 'POST') { handlePostConfig(req, res); return; }
   if (url === '/api/stats' && req.method === 'GET') { handleGetStats(req, res); return; }
+
+  // 会话管理 API
+  if (url === '/api/sessions' && req.method === 'GET') {
+    const sessions = [];
+    for (const [key, val] of sessionStore) {
+      sessions.push({ key, userId: val.yuanbaoUserId.slice(0, 12) + '...', ageMin: Math.round((Date.now() - val.createdAt) / 60000) });
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ active: sessions.length, sessions }));
+    return;
+  }
+  if (url === '/api/sessions/reset' && req.method === 'POST') {
+    const body = await readBody(req);
+    const data = JSON.parse(body.toString('utf-8') || '{}');
+    const ip = getClientIP(req);
+    const sid = data.session_id || 'default';
+    const key = `${ip}:${sid}`;
+    sessionStore.delete(key);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, message: `session ${sid} reset` }));
+    return;
+  }
+  if (url === '/api/sessions' && req.method === 'DELETE') {
+    sessionStore.clear();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, message: 'all sessions cleared' }));
+    return;
+  }
 
   if (url === '/v1/chat/completions' && req.method === 'POST') {
     await handleChatCompletions(req, res);
