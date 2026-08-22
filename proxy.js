@@ -553,7 +553,13 @@ async function handleChatCompletions(req, res) {
     });
   } catch (err) {
     stats.errors++;
-    sendChunk({ content: `\n\n[错误] ${err.message}` }, 'stop');
+    log('error', '流式请求失败', err.message);
+    const errMsg = err.message || '未知错误';
+    if (fullContent) {
+      sendChunk({ content: `\n\n[上游错误] ${errMsg}` }, 'stop');
+    } else {
+      sendChunk({ content: `[错误] ${errMsg}` }, 'stop');
+    }
     res.write('data: [DONE]\n\n');
     activeRequests--;
   }
@@ -796,8 +802,10 @@ async function handleResponses(req, res) {
     });
   } catch (err) {
     if (fullContent === '') {
-      fullContent = `\n\n[错误] ${err.message}`;
+      fullContent = `[错误] ${err.message}`;
       sendDelta(fullContent);
+    } else {
+      sendDelta(`\n\n[上游错误] ${err.message}`);
     }
     finishStream(fullContent);
   }
