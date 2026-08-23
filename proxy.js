@@ -280,17 +280,28 @@ function truncateQuery(query, maxLen) {
   if (encLen <= maxLen) return query;
 
   // 保留开头（system prompt / 工具定义）和结尾（最近对话）
-  const headStr = query.slice(0, Math.min(query.length, 500));
+  const queryChars = Array.from(query);
   const marker = '\n\n[...历史消息已截断...]\n\n';
-  const headEnc = encodeURIComponent(headStr).length + encodeURIComponent(marker).length;
-  const remaining = maxLen - headEnc - 200; // 200 给 tail 余量
+  const markerLen = encodeURIComponent(marker).length;
+  let headStr = '';
+  let headCount = 0;
 
-  // 从尾部往前找，直到编码后长度合适
-  let tailStart = query.length;
-  while (tailStart > 0 && encodeURIComponent(query.slice(tailStart)).length > remaining) {
-    tailStart = Math.floor(tailStart * 0.9);
+  while (headCount < Math.min(queryChars.length, 500)) {
+    const candidate = headStr + queryChars[headCount];
+    if (encodeURIComponent(candidate).length + markerLen > maxLen) break;
+    headStr = candidate;
+    headCount++;
   }
-  const result = headStr + marker + query.slice(tailStart);
+
+  const remaining = maxLen - encodeURIComponent(headStr).length - markerLen;
+  let tailStr = '';
+  for (let i = queryChars.length - 1; i >= headCount; i--) {
+    const candidate = queryChars[i] + tailStr;
+    if (encodeURIComponent(candidate).length > remaining) break;
+    tailStr = candidate;
+  }
+
+  const result = headStr + marker + tailStr;
   log('warn', `query 过长 (编码后 ${encLen} 字符)，已截断至 ${encodeURIComponent(result).length} 字符`);
   return result;
 }
