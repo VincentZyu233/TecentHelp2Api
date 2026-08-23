@@ -211,8 +211,13 @@ function buildFunctionCallPrompt(tools) {
   if (!config.functionCall.enabled || !tools || !tools.length) return null;
 
   const toolsSchema = tools.map(t => {
-    const f = t.function;
-    return `- ${f.name}: ${f.description}\n  参数: ${JSON.stringify(f.parameters)}`;
+    // 兼容 OpenAI 嵌套格式 {type,function:{name,description,parameters}} 与
+    // cc-switch 本地代理转出的扁平格式 {type,name,description,parameters}
+    const f = t.function || t;
+    const name = f.name || 'unnamed';
+    const desc = f.description || '';
+    const params = f.parameters || f.input_schema || {};
+    return `- ${name}: ${desc}\n  参数: ${JSON.stringify(params)}`;
   }).join('\n');
 
   return config.functionCall.systemPrompt.replace('{tools_schema}', toolsSchema);
@@ -643,7 +648,17 @@ async function handleResponses(req, res) {
   }
 
   const stream = chatRequest.stream;
-  const query = truncateQuery(extractQuery(chatRequest.messages), 6000);
+  let query = truncateQuery(extractQuery(chatRequest.messages), 6000);
+
+  // 注入工具描述（Function Call 适配），与 handleChatCompletions 一致
+  let fcPromptAdded = false;
+  if (chatRequest.tools && config.functionCall.enabled) {
+    const fcPrompt = buildFunctionCallPrompt(chatRequest.tools);
+    if (fcPrompt) {
+      query = fcPrompt + '\n\n用户问题：' + query;
+      fcPromptAdded = true;
+    }
+  }
 
   if (!stream) {
     let fullContent = '';
