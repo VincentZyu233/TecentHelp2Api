@@ -8,18 +8,29 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; height: 100vh; display: flex; flex-direction: column; }
-  .topbar { background: #1a1a2e; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
-  .topbar h1 { font-size: 16px; }
-  .topbar .tag { background: #07c160; padding: 2px 10px; border-radius: 10px; font-size: 11px; }
-  .topbar .right { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 13px; }
-  .topbar input { background: #2a2a4a; border: 1px solid #444; color: #fff; border-radius: 6px; padding: 5px 10px; font-size: 13px; width: 180px; }
-  .topbar select { background: #2a2a4a; border: 1px solid #444; color: #fff; border-radius: 6px; padding: 5px 10px; font-size: 13px; }
+
+  /* ===== 顶部栏 ===== */
+  .topbar { background: #1a1a2e; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .topbar h1 { font-size: 15px; white-space: nowrap; }
+  .topbar .tag { background: #07c160; padding: 2px 8px; border-radius: 10px; font-size: 10px; white-space: nowrap; }
+  .topbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+  .topbar label { white-space: nowrap; font-size: 12px; }
+  .topbar input { background: #2a2a4a; border: 1px solid #444; color: #fff; border-radius: 6px; padding: 5px 8px; font-size: 12px; width: 140px; }
+  .topbar select { background: #2a2a4a; border: 1px solid #444; color: #fff; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+
+  /* ===== 信息栏 ===== */
+  .info-bar { background: #e8f5e9; border-bottom: 1px solid #c8e6c9; padding: 6px 16px; font-size: 11px; color: #2e7d32; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .info-bar .dev-toggle { display: none; margin-left: auto; background: #1a1a2e; color: #fff; border: none; border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+
+  /* ===== 主区域 ===== */
   .main { flex: 1; display: flex; overflow: hidden; }
-  .chat { flex: 1; display: flex; flex-direction: column; }
-  .msgs { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-  .msg { display: flex; gap: 10px; max-width: 80%; }
+  .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+  /* ===== 消息列表 ===== */
+  .msgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { display: flex; gap: 8px; max-width: 85%; }
   .msg.user { align-self: flex-end; flex-direction: row-reverse; }
-  .av { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; flex-shrink: 0; }
+  .av { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff; flex-shrink: 0; }
   .msg.ai .av { background: linear-gradient(135deg, #667eea, #764ba2); }
   .msg.user .av { background: #07c160; }
   .bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.7; word-break: break-word; }
@@ -32,17 +43,22 @@
   .bubble pre code { background: none; padding: 0; }
   .bubble blockquote { border-left: 3px solid #07c160; padding-left: 10px; color: #666; margin: 4px 0; }
   .bubble a { color: #409eff; }
+  .bubble.error { background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; }
   .dots span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #999; margin: 0 2px; animation: b 1.4s infinite; }
   .dots span:nth-child(2){animation-delay:.2s} .dots span:nth-child(3){animation-delay:.4s}
   @keyframes b {0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
-  .input-bar { padding: 14px 20px; background: #fff; border-top: 1px solid #e4e7ed; display: flex; gap: 10px; }
-  .input-bar textarea { flex: 1; border: 1px solid #dcdfe6; border-radius: 10px; padding: 8px 14px; font-size: 14px; resize: none; outline: none; max-height: 100px; min-height: 42px; line-height: 1.5; font-family: inherit; }
+
+  /* ===== 输入栏 ===== */
+  .input-bar { padding: 10px 12px; background: #fff; border-top: 1px solid #e4e7ed; display: flex; gap: 8px; }
+  .input-bar textarea { flex: 1; border: 1px solid #dcdfe6; border-radius: 10px; padding: 8px 12px; font-size: 14px; resize: none; outline: none; max-height: 100px; min-height: 40px; line-height: 1.5; font-family: inherit; }
   .input-bar textarea:focus { border-color: #07c160; }
-  .btn { border: none; border-radius: 8px; padding: 8px 18px; font-size: 14px; cursor: pointer; font-weight: 500; }
+  .btn { border: none; border-radius: 8px; padding: 8px 16px; font-size: 14px; cursor: pointer; font-weight: 500; white-space: nowrap; }
   .btn-send { background: #07c160; color: #fff; } .btn-send:hover { background: #06ad56; }
   .btn-send:disabled { background: #c0c4cc; cursor: not-allowed; }
   .btn-stop { background: #f56c6c; color: #fff; }
-  .dev { width: 380px; background: #1e1e1e; color: #d4d4d4; overflow-y: auto; font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+
+  /* ===== 调试面板 ===== */
+  .dev { width: 360px; background: #1e1e1e; color: #d4d4d4; overflow-y: auto; font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; flex-shrink: 0; }
   .dev-entry { border-bottom: 1px solid #333; padding: 8px 12px; }
   .dev-method { font-weight: 700; padding: 1px 5px; border-radius: 3px; font-size: 10px; }
   .dev-method.POST { background: #6b4f1a; color: #f0c674; }
@@ -50,9 +66,42 @@
   .dev-url { color: #79c0ff; word-break: break-all; }
   .dev-body { background: #2d2d2d; border-radius: 4px; padding: 5px 7px; margin-top: 4px; white-space: pre-wrap; word-break: break-all; color: #c9d1d9; max-height: 180px; overflow-y: auto; }
   .dev-label { color: #8b949e; font-size: 10px; margin-top: 4px; }
+
   ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 3px; }
   .dev::-webkit-scrollbar-thumb { background: #555; }
-  .info-bar { background: #e8f5e9; border-bottom: 1px solid #c8e6c9; padding: 6px 24px; font-size: 12px; color: #2e7d32; display: flex; gap: 16px; }
+
+  /* ===== 移动端响应式 ===== */
+  @media (max-width: 768px) {
+    .main { flex-direction: column; }
+    .topbar { padding: 8px 12px; gap: 8px; }
+    .topbar h1 { font-size: 13px; }
+    .topbar .tag { font-size: 9px; padding: 1px 6px; }
+    .topbar .right { width: 100%; margin-left: 0; gap: 6px; }
+    .topbar label { font-size: 11px; }
+    .topbar input { width: 100px; font-size: 11px; padding: 4px 6px; }
+    .topbar select { font-size: 11px; padding: 4px 6px; }
+
+    .info-bar { padding: 5px 12px; font-size: 10px; gap: 8px; }
+    .info-bar .dev-toggle { display: inline-block; }
+
+    .msgs { padding: 10px; gap: 10px; }
+    .msg { max-width: 92%; }
+    .av { width: 28px; height: 28px; font-size: 12px; }
+    .bubble { padding: 8px 12px; font-size: 13px; }
+
+    .input-bar { padding: 8px 10px; gap: 6px; }
+    .input-bar textarea { font-size: 13px; min-height: 38px; }
+    .btn { padding: 6px 14px; font-size: 13px; }
+
+    /* 调试面板：改为底部抽屉 */
+    .dev {
+      width: 100%;
+      max-height: 40vh;
+      border-top: 2px solid #333;
+      display: none;
+    }
+    .dev.show { display: block; }
+  }
 </style>
 </head>
 <body>
@@ -68,6 +117,7 @@
 <div class="info-bar">
   <span>POST /v1/chat/completions</span>
   <span id="statusDot" style="color:#999">● 检查中...</span>
+  <button class="dev-toggle" id="devToggle">调试面板</button>
 </div>
 <div class="main">
   <div class="chat">
@@ -85,6 +135,7 @@
 <script>
 const API = '/v1/chat/completions';
 let abortCtrl = null, streaming = false;
+let chatHistory = [];  // 保留对话历史，支持多轮上下文
 
 function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
@@ -106,13 +157,17 @@ function devResp(entry, text) {
   entry.scrollIntoView({block:'end'});
 }
 
-function addMsg(role, text) {
+function addMsg(role, text, isError) {
   const c = document.getElementById('msgs');
   const m = document.createElement('div');
   m.className = 'msg '+role;
-  m.innerHTML = `<div class="av">${role==='user'?'我':'AI'}</div><div class="bubble"></div>`;
+  m.innerHTML = `<div class="av">${role==='user'?'我':'AI'}</div><div class="bubble${isError?' error':''}"></div>`;
   const b = m.querySelector('.bubble');
-  b.innerHTML = role==='user' ? escapeHtml(text) : (marked ? marked.parse(text,{breaks:true}) : escapeHtml(text).replace(/\n/g,'<br>'));
+  if (isError) {
+    b.textContent = text;
+  } else {
+    b.innerHTML = role==='user' ? escapeHtml(text) : (marked ? marked.parse(text,{breaks:true}) : escapeHtml(text).replace(/\n/g,'<br>'));
+  }
   c.appendChild(m); c.scrollTop = c.scrollHeight;
   return b;
 }
@@ -125,15 +180,17 @@ async function send() {
   document.getElementById('stopBtn').style.display='inline-block';
 
   addMsg('user', q);
+  chatHistory.push({ role: 'user', content: q });
   document.getElementById('input').value = '';
   document.getElementById('input').style.height = 'auto';
 
   const apiKey = document.getElementById('apiKey').value.trim();
   const model = document.getElementById('model').value;
 
+  // 带完整对话历史发送
   const reqBody = {
     model,
-    messages: [{ role: 'user', content: q }],
+    messages: chatHistory.map(m => ({ role: m.role, content: m.content })),
     stream: true,
   };
 
@@ -162,9 +219,12 @@ async function send() {
 
     if (!resp.ok) {
       tm.remove();
-      const errText = await resp.text();
+      let errText = '';
+      try { errText = await resp.text(); } catch {}
       devResp(entry, errText);
-      addMsg('ai', '⚠️ 错误: ' + errText);
+      let errDisplay = `HTTP ${resp.status}`;
+      try { const ej = JSON.parse(errText); errDisplay = ej.error?.message || errText || errDisplay; } catch { errDisplay = errText || errDisplay; }
+      addMsg('ai', '请求失败: ' + errDisplay, true);
       streaming = false;
       document.getElementById('sendBtn').style.display='inline-block';
       document.getElementById('stopBtn').style.display='none';
@@ -189,6 +249,8 @@ async function send() {
         let chunk;
         try { chunk = JSON.parse(jsonStr); } catch { continue; }
         const delta = chunk.choices?.[0]?.delta || {};
+
+        // 检测错误内容（代理在流式错误时会把 [错误] 作为 content 发出）
         if (delta.content) {
           if (firstChunk) { tm.querySelector('.dots')?.remove(); firstChunk = false; }
           accum += delta.content;
@@ -200,7 +262,13 @@ async function send() {
         }
       }
     }
-    if (firstChunk) tm.remove();
+    if (firstChunk) {
+      tm.remove();
+      addMsg('ai', '（返回为空，未收到任何内容）', true);
+    } else {
+      // 保存 assistant 回复到历史
+      chatHistory.push({ role: 'assistant', content: accum });
+    }
   } catch (err) {
     tm.remove();
     if (err.name === 'AbortError') {
@@ -208,7 +276,7 @@ async function send() {
       if (bubble) bubble.innerHTML += '<p style="color:#999;font-size:12px">（已停止）</p>';
     } else {
       devResp(entry, '❌ ' + err.message);
-      addMsg('ai', '⚠️ ' + err.message);
+      addMsg('ai', err.message, true);
     }
   }
   streaming = false;
@@ -225,6 +293,13 @@ fetch('/health').then(r=>r.json()).then(d=>{
   document.getElementById('statusDot').style.color = '#f56c6c';
 });
 
+// 调试面板切换（移动端）
+document.getElementById('devToggle').addEventListener('click', () => {
+  const panel = document.getElementById('devPanel');
+  panel.classList.toggle('show');
+});
+
+// 输入框自适应高度 + Enter 发送
 document.getElementById('input').addEventListener('input', function(){ this.style.height='auto'; this.style.height=Math.min(this.scrollHeight,100)+'px'; });
 document.getElementById('input').addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
 document.getElementById('sendBtn').addEventListener('click', send);
