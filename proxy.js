@@ -144,23 +144,148 @@ function getClientIP(req) {
 }
 
 /**
- * 获取或创建会话的 userid
- * 优先级：body.user > config.defaultUserId
+ * 从腾讯后端动态获取 userid
  * 
- * 注意：腾讯元宝接口会校验 userid 合法性，随机生成的 ID 会被拒绝（"userid is invalid"）
- * 因此所有会话统一使用 config.defaultUserId，通过 sessionId 区分不同会话上下文
- * 如需多 userid 轮换，可在 config.json 的 userIds 数组中配置多个
+ * 逆向分析发现：
+ * 1. 前端调用 /kfbackend/api/webSearchStrategyJudge?query=xxx&userid= （userid 为空）
+ * 2. 后端会分配一个合法的 userid（格式：oIJ + hex），在响应的 data.userid 中返回
+ * 3. 前端将此 userid 保存到 localStorage，后续元宝 API 调用使用它
+ * 
+ * 此函数模拟该流程，自动获取合法 userid
  */
-function resolveUserId(req, body) {
+const userIdCache = new Map(); // sessionKey → { userid, expires }
+const USERID_CACHE_TTL = 30 * 60 * 1000; // 30 分钟过期
+
+function fetchUserIdFromBackend(query, sessionKey) {
+  // 先查缓存
+  const cached = userIdCache.get(sessionKey);
+  if (cached && Date.now() < cached.expires) {
+    return Promise.resolve(cached.userid);
+  }
+
+  const params = new URLSearchParams({
+    query: query || 'hello',
+    userid: '',
+  });
+  const urlPath = `/kfbackend/api/webSearchStrategyJudge?${params}`;
+
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+
+    const handleResponse = (statusCode, body) => {
+      if (statusCode !== 200) {
+        reject(new Error(`webSearchStrategyJudge 返回 HTTP ${statusCode}`));
+        return;
+      }
+      try {
+        const data = JSON.parse(body);
+        const newUserId = data?.data?.userid;
+        if (newUserId && newUserId !== '0' && newUserId.length > 10) {
+          // 缓存 userid
+          userIdCache.set(sessionKey, { userid: newUserId, expires: Date.now() + USERID_CACHE_TTL });
+          log('info', `动态获取 userid 成功: ${newUserId.slice(0, 12)}... (耗时 ${Date.now() - startTime}ms)`);
+          resolve(newUserId);
+        } else {
+          reject(new Error('后端未分配有效 userid'));
+        }
+      } catch (e) {
+        reject(new Error(`解析 webSearchStrategyJudge 响应失败: ${e.message}`));
+      }
+    };
+
+    if (proxyHost) {
+      // 走 HTTP CONNECT 隧道
+      const connectReq = http.request({
+        host: proxyHost,
+        port: proxyPort,
+        method: 'CONNECT',
+        path: `${TARGET_HOST}:443`,
+      });
+
+      connectReq.on('connect', (resp, socket) => {
+        if (resp.statusCode !== 200) {
+          reject(new Error(`CONNECT 隧道失败: ${resp.statusCode}`));
+          return;
+        }
+        const tlsSocket = require('tls').connect({ socket, servername: TARGET_HOST }, () => {
+          const reqLine = `GET ${urlPath} HTTP/1.1\r\nHost: ${TARGET_HOST}\r\nReferer: https://${TARGET_HOST}/portal_index/chat.html\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\nAccept: */*\r\nConnection: close\r\n\r\n`;
+          tlsSocket.write(reqLine);
+        });
+
+        let buffer = '';
+        let headersParsed = false;
+
+        tlsSocket.on('data', (chunk) => {
+          buffer += chunk.toString('utf-8');
+          if (!headersParsed) {
+            const headerEnd = buffer.indexOf('\r\n\r\n');
+            if (headerEnd === -1) return;
+            const statusCode = parseInt(buffer.slice(0, headerEnd).split('\r\n')[0].split(' ')[1]) || 0;
+            buffer = buffer.slice(headerEnd + 4);
+            headersParsed = true;
+            if (statusCode !== 200) {
+              reject(new Error(`webSearchStrategyJudge 返回 HTTP ${statusCode}`));
+              return;
+            }
+          }
+        });
+
+        tlsSocket.on('end', () => {
+          if (buffer) handleResponse(200, buffer);
+        });
+        tlsSocket.on('error', (e) => reject(e));
+      });
+
+      connectReq.on('error', (e) => reject(e));
+      connectReq.setTimeout(10000, () => {
+        connectReq.destroy();
+        reject(new Error('CONNECT 超时'));
+      });
+      connectReq.end();
+    } else {
+      // 直连模式
+      const upstream = https.request({
+        method: 'GET',
+        hostname: TARGET_HOST,
+        path: urlPath,
+        headers: {
+          'Host': TARGET_HOST,
+          'Referer': `https://${TARGET_HOST}/portal_index/chat.html`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': '*/*',
+        },
+        agent: httpsAgent,
+      }, (upRes) => {
+        let body = '';
+        upRes.on('data', (c) => body += c.toString('utf-8'));
+        upRes.on('end', () => handleResponse(upRes.statusCode, body));
+      });
+      upstream.on('error', (e) => reject(e));
+      upstream.setTimeout(10000, () => {
+        upstream.destroy();
+        reject(new Error('请求超时'));
+      });
+    }
+  }).catch(err => {
+    log('warn', `动态获取 userid 失败: ${err.message}，回退到配置的 defaultUserId`);
+    // 回退到配置的 userid
+    const fallback = config.defaultUserId || DEFAULT_USERID;
+    return fallback;
+  });
+}
+
+/**
+ * 获取或创建会话的 userid
+ * 
+ * userid 获取优先级：
+ * 1. 客户端显式传 user → 直接使用
+ * 2. 会话缓存中已有 → 使用缓存的 userid
+ * 3. 后端动态分配 → 调用 webSearchStrategyJudge 获取
+ * 4. 回退 → 使用 config.defaultUserId
+ */
+async function resolveUserId(req, body) {
   // 客户端显式传了 user，直接用（高级用法）
   if (body.user) return { userid: body.user, sessionId: body.user, isNew: false };
-
-  // 从配置中获取 userid（支持单值或数组轮换）
-  const userIds = config.userIds || (config.defaultUserId ? [config.defaultUserId] : []);
-  if (userIds.length === 0) {
-    log('error', '未配置 defaultUserId 或 userIds，元宝接口将拒绝请求');
-  }
-  const userId = userIds[Math.floor(Math.random() * userIds.length)] || '';
 
   const ip = getClientIP(req);
   const clientSessionId = req.headers['x-session-id'] || body.session_id || 'default';
@@ -169,14 +294,19 @@ function resolveUserId(req, body) {
   const key = `${ip}:${clientSessionId}`;
   const now = Date.now();
 
-  if (newSession || !sessionStore.has(key)) {
-    sessionStore.set(key, { yuanbaoUserId: userId, createdAt: now, lastUsed: now });
-    return { userid: userId, sessionId: clientSessionId, isNew: true };
+  // 检查会话存储
+  if (!newSession && sessionStore.has(key)) {
+    const entry = sessionStore.get(key);
+    entry.lastUsed = now;
+    return { userid: entry.yuanbaoUserId, sessionId: clientSessionId, isNew: false };
   }
 
-  const entry = sessionStore.get(key);
-  entry.lastUsed = now;
-  return { userid: entry.yuanbaoUserId, sessionId: clientSessionId, isNew: false };
+  // 动态从后端获取 userid
+  const query = body.messages?.[body.messages.length - 1]?.content || 'hello';
+  const userid = await fetchUserIdFromBackend(typeof query === 'string' ? query.slice(0, 50) : 'hello', key);
+
+  sessionStore.set(key, { yuanbaoUserId: userid, createdAt: now, lastUsed: now });
+  return { userid, sessionId: clientSessionId, isNew: true };
 }
 
 /* ========================== 环境代理检测 ========================== */
@@ -717,7 +847,7 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const { userid } = resolveUserId(req, body);
+  const { userid } = await resolveUserId(req, body);
   const senceName = body.sence_name || req.headers['x-yuanbao-sence'] || '';
   const model = body.model || 'yuanbao';
   const stream = body.stream !== false;
@@ -967,7 +1097,8 @@ async function handleResponses(req, res) {
     let citations = null;
 
     try {
-      await callYuanbao(query, resolveUserId(req, body), '', {
+      const resolvedUser = await resolveUserId(req, body);
+      await callYuanbao(query, resolvedUser.userid, '', {
         onCitations: (refData) => { citations = refData; },
         onContent: (text) => { fullContent += text; },
       });
@@ -1124,7 +1255,8 @@ async function handleResponses(req, res) {
   };
 
   try {
-    await callYuanbao(query, resolveUserId(req, body), '', {
+    const resolvedUser = await resolveUserId(req, body);
+    await callYuanbao(query, resolvedUser.userid, '', {
       onContent: (text) => {
         fullContent += text;
         sendDelta(text);
