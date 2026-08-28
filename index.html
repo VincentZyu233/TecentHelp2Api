@@ -4,6 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>元宝 OpenAI 代理 - 测试</title>
+<script>
+// Polyfill: String.prototype.at() / Array.prototype.at() — ES2022
+// 旧版安卓 WebView 不支持，marked.js 依赖此方法
+if (!String.prototype.at) {
+  String.prototype.at = function(index) {
+    const str = String(this);
+    const len = str.length;
+    const i = index < 0 ? Math.trunc(len + index) : Math.trunc(index);
+    return (i < 0 || i >= len) ? undefined : str.charAt(i);
+  };
+}
+if (!Array.prototype.at) {
+  Array.prototype.at = function(index) {
+    const len = this.length;
+    const i = index < 0 ? Math.trunc(len + index) : Math.trunc(index);
+    return (i < 0 || i >= len) ? undefined : this[i];
+  };
+}
+</script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -139,6 +158,19 @@ let chatHistory = [];  // 保留对话历史，支持多轮上下文
 
 function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+// 安全 Markdown 渲染：marked 出错时降级为纯文本
+function safeMarkdown(text) {
+  if (typeof marked === 'undefined' || !marked.parse) {
+    return escapeHtml(text).replace(/\n/g,'<br>');
+  }
+  try {
+    return marked.parse(text, { breaks: true });
+  } catch (e) {
+    console.warn('marked parse failed:', e.message);
+    return escapeHtml(text).replace(/\n/g,'<br>');
+  }
+}
+
 function devLog(method, url, opts={}) {
   const panel = document.getElementById('devPanel');
   const entry = document.createElement('div');
@@ -166,7 +198,7 @@ function addMsg(role, text, isError) {
   if (isError) {
     b.textContent = text;
   } else {
-    b.innerHTML = role==='user' ? escapeHtml(text) : (marked ? marked.parse(text,{breaks:true}) : escapeHtml(text).replace(/\n/g,'<br>'));
+    b.innerHTML = role==='user' ? escapeHtml(text) : safeMarkdown(text);
   }
   c.appendChild(m); c.scrollTop = c.scrollHeight;
   return b;
@@ -254,7 +286,7 @@ async function send() {
         if (delta.content) {
           if (firstChunk) { tm.querySelector('.dots')?.remove(); firstChunk = false; }
           accum += delta.content;
-          bubble.innerHTML = marked ? marked.parse(accum, {breaks:true}) : escapeHtml(accum).replace(/\n/g,'<br>');
+          bubble.innerHTML = safeMarkdown(accum);
           c.scrollTop = c.scrollHeight;
         }
         if (chunk.choices?.[0]?.finish_reason === 'stop') {
